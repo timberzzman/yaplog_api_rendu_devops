@@ -1,0 +1,55 @@
+pipeline {
+    agent any
+    tools {
+        nodejs 'node 18'
+    }
+    stages {
+        stage('Install packages') {
+            steps {
+                git branch: 'develop', url: 'https://github.com/YAPLOG/yaplog-api.git'
+                sh 'npm ci'
+            }
+        }
+        stage('Lint') {
+            steps {
+                nodejs('node 18') {
+                    sh 'npm run lint'
+                }
+            }
+        }
+        stage('Build') {
+            steps {
+                sh 'npm run build'
+            }
+        }
+        stage('Put project in Docker image') {
+            steps {
+                writeFile file: 'Dockerfile', text: '''FROM node:18
+WORKDIR .
+COPY package.json .
+COPY dist .
+COPY prisma/schema.prisma prisma/schema.prisma
+RUN npm install --only=production
+RUN npx prisma generate
+RUN npm install pm2 -g
+EXPOSE 8080
+CMD ["pm2-runtime", "start", "./src/index.js"]'''
+                sh 'docker build --tag timberzzman/yaplog-api:latest .'
+            }
+        }
+        stage('Deploy Docker image') {
+            steps {
+                withCredentials([string(credentialsId: 'dockerPass', variable: 'dockerHubPass')]) {
+                    sh 'docker login -u timberzzman -p $dockerHubPass'
+                }
+                sh 'docker push timberzzman/yaplog-api:latest'
+            }
+        }
+    }
+    post {
+        failure {
+            emailext body: 'Ce build $BUILD_NUMBER a échoué',
+            recipientProviders: [requestor()], subject: 'build'
+        }
+    }
+}
